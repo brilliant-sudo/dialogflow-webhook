@@ -1,6 +1,6 @@
 [build]
   functions = "netlify/functions"
-  publish = "public"  # If you have a static site; you can set it to an empty folder if not needed
+  publish = "."
 
 [dev]
   functions = "netlify/functions"
