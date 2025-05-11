@@ -1,15 +1,9 @@
 {
   "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/webhook.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/webhook",
-      "dest": "/api/webhook.js"
+      "source": "/api/webhook",
+      "destination": "/src/index.js"
     }
   ]
 }
