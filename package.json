@@ -1,9 +1,9 @@
 {
   "name": "webhook",
   "version": "1.0.0",
-  "main": "src/index.js",
+  "main": "api/webhook.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node api/webhook.js"
   },
   "keywords": [],
   "author": "",
