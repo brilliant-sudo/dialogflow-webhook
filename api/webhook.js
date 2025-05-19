@@ -3,11 +3,6 @@ const { google } = require('googleapis');
 const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance();
 const nodemailer = require('nodemailer');
 
-const express = require('express');
-const { google } = require('googleapis');
-const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance();
-const nodemailer = require('nodemailer');
-
 const app = express();
 app.use(express.json());
 
