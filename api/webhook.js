@@ -8,15 +8,17 @@ app.use(express.json());
 
 /**
  * @route GET /
- * @description Verifies webhook deployment status. Returns 200 OK with a status message.
+ * @description Health check endpoint for the webhook.
+ * @returns {string} "Webhook is running! Send POST requests to /api/webhook"
  */
 app.get('/', (req, res) => {
   res.status(200).send('Webhook is running! Send POST requests to /api/webhook');
 });
 
 /**
- * @param {string} name User's full name.
- * @returns {boolean} True if the name contains only letters and spaces with at least two words.
+ * @function isValidName
+ * @param {string} name - The user's full name.
+ * @returns {boolean} - True if the name contains only letters and spaces and has at least two words.
  */
 function isValidName(name) {
   if (typeof name !== 'string') {
@@ -25,24 +27,26 @@ function isValidName(name) {
   }
   const trimmedName = name.trim();
   const nameParts = trimmedName.split(/\s+/).filter(part => part.length > 0);
-  return /^[A-Za-z\s]+$/.test(trimmedName) && nameParts.length >= 2;
+  return /^[A-Za-z\\s]+$/.test(trimmedName) && nameParts.length >= 2;
 }
 
 /**
- * @param {string} email User's email address.
- * @returns {boolean} True if the email matches a common format.
+ * @function isValidEmail
+ * @param {string} email - The user's email address.
+ * @returns {boolean} - True if the email matches a common format.
  */
 function isValidEmail(email) {
   if (typeof email !== 'string') {
     console.error("isValidEmail: Received non-string input:", email);
     return false;
   }
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  return /^[\\S@]+@[\\S@]+\\.[\\S@]+$/.test(email.trim());
 }
 
 /**
- * @param {string} phone User's phone number.
- * @returns {boolean} True if the phone number is considered valid by the `google-libphonenumber` library.
+ * @function isValidPhoneNumber
+ * @param {string} phone - The user's phone number.
+ * @returns {boolean} - True if the phone number is considered valid by the `google-libphonenumber` library.
  */
 function isValidPhoneNumber(phone) {
   if (typeof phone !== 'string') {
@@ -60,16 +64,19 @@ function isValidPhoneNumber(phone) {
 
 /**
  * @async
- * @param {string} name User's full name.
- * @param {string} email User's email address.
- * @param {string} phone User's phone number.
+ * @function saveToGoogleSheets
+ * @param {string} name - The user's full name.
+ * @param {string} email - The user's email address.
+ * @param {string} phone - The user's phone number.
+ * @param {string} date - The date of submission in YYYY-MM-DD format.
+ * @param {string} time - The time of submission in HH:MM:SS format.
  * @throws {Error} If saving to Google Sheets fails.
  */
-async function saveToGoogleSheets(name, email, phone) {
+async function saveToGoogleSheets(name, email, phone, date, time) {
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_CLIENT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\\\n/g, '\\n'),
     },
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
@@ -79,13 +86,13 @@ async function saveToGoogleSheets(name, email, phone) {
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: 'Sheet1!A1:C1',
+      range: 'Sheet1!A1:E1',
       valueInputOption: 'USER_ENTERED',
       resource: {
-        values: [[name, email, phone]],
+        values: [[name, email, phone, date, time]],
       },
     });
-    console.log('User info saved to Google Sheets successfully.');
+    console.log('User info saved to Google Sheets successfully with date and time.');
   } catch (error) {
     console.error('Error saving to Google Sheets:', error);
     throw error;
@@ -94,10 +101,12 @@ async function saveToGoogleSheets(name, email, phone) {
 
 /**
  * @async
- * @param {string} recipientEmail User's email address to send confirmation to.
+ * @function sendConfirmationEmail
+ * @param {string} recipientEmail - The user's email address for confirmation.
+ * @param {string} userName - The user's full name for personalized greeting.
  * @throws {Error} If sending the confirmation email fails.
  */
-async function sendConfirmationEmail(recipientEmail) {
+async function sendConfirmationEmail(recipientEmail, userName) {
   try {
     const transporter = nodemailer.createTransport({
       service: 'Gmail',
@@ -107,12 +116,16 @@ async function sendConfirmationEmail(recipientEmail) {
       },
     });
 
+    const subject = 'Thank you for visiting US Cryotherapy!';
+    const text = `Thank you **${userName}** for sharing your information with **US Cryotherapy**! You can now continue with your booking.`;
+    const html = `<p>Thank you <b>${userName}</b> for sharing your information with <b>US Cryotherapy</b>! You can now continue with your booking.</p>`;
+
     const mailOptions = {
       from: process.env.EMAIL_AUTH_USER,
       to: recipientEmail,
-      subject: 'Thank You for Booking with US Cryotherapy!',
-      text: 'Thank you for choosing US Cryotherapy. We look forward to seeing you!',
-      html: '<p>Thank you for choosing <b>US Cryotherapy</b>! We look forward to seeing you.</p>',
+      subject: subject,
+      text: text,
+      html: html,
     };
 
     const info = await transporter.sendMail(mailOptions);
@@ -126,8 +139,9 @@ async function sendConfirmationEmail(recipientEmail) {
 /**
  * @async
  * @route POST /api/webhook
- * @param {express.Request} req Dialogflow request object.
- * @param {express.Response} res Express response object.
+ * @description Handles incoming requests from Dialogflow, validates user data, saves it to Google Sheets, and sends a confirmation email.
+ * @param {express.Request} req - The Express.js request object.
+ * @param {express.Response} res - The Express.js response object.
  * @returns {Promise<void>}
  */
 app.post('/api/webhook', async (req, res) => {
@@ -137,8 +151,8 @@ app.post('/api/webhook', async (req, res) => {
 
   const nameParam = params['fullname'];
   const name = typeof nameParam === 'object' && nameParam !== null && typeof nameParam.name === 'string'
-               ? String(nameParam.name).trim()
-               : String(nameParam || '').trim();
+    ? String(nameParam.name).trim()
+    : String(nameParam || '').trim();
 
   const email = String(params['email'] || '').trim();
   const phone = String(params['phone-number'] || '').trim();
@@ -169,7 +183,7 @@ app.post('/api/webhook', async (req, res) => {
     if (!emailValid) invalidFieldsMessage += 'a valid email address, ';
     if (!phoneValid) invalidFieldsMessage += 'a valid phone number, ';
 
-    invalidFieldsMessage = invalidFieldsMessage.replace(/,\s*$/, '.');
+    invalidFieldsMessage = invalidFieldsMessage.replace(/,\\s*$/, '.');
 
     return res.json({
       followupEventInput: {
@@ -181,8 +195,19 @@ app.post('/api/webhook', async (req, res) => {
   }
 
   try {
-    await saveToGoogleSheets(name, email, phone);
-    await sendConfirmationEmail(email);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    const currentDate = `${year}-${month}-${day}`;
+    const currentTime = `${hours}:${minutes}:${seconds}`;
+
+    await saveToGoogleSheets(name, email, phone, currentDate, currentTime);
+    await sendConfirmationEmail(email, name);
 
     return res.json({
       followupEventInput: {
