@@ -12,6 +12,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "google-libphonenumber": "^3.2.40",
-    "googleapis": "^148.0.0"
+    "googleapis": "^148.0.0",
+    "nodemailer": "^7.0.3"
   }
 }

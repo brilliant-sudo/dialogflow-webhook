@@ -1,31 +1,38 @@
 const express = require('express');
 const { google } = require('googleapis');
 const phoneUtil = require('google-libphonenumber').PhoneNumberUtil.getInstance();
-const app = express();
+const nodemailer = require('nodemailer');
 
+const app = express();
 app.use(express.json());
 
-// --- Basic GET route for testing deployment ---
-// This route will respond when you visit your Vercel URL in a browser (e.g., https://your-vercel-app.vercel.app/)
+/**
+ * @route GET /
+ * @description Verifies webhook deployment status. Returns 200 OK with a status message.
+ */
 app.get('/', (req, res) => {
   res.status(200).send('Webhook is running! Send POST requests to /api/webhook');
 });
 
-// --- Validation Functions ---
-// Fullname: letters only, 2–3 words
+/**
+ * @param {string} name User's full name.
+ * @returns {boolean} True if the name contains only letters and spaces with at least two words.
+ */
 function isValidName(name) {
-  // Ensure name is a string before trimming
   if (typeof name !== 'string') {
     console.error("isValidName: Received non-string input:", name);
     return false;
   }
-  // The regex allows 1 to 3 words composed of letters
-  return /^[A-Za-z]+( [A-Za-z]+){1,2}$/.test(name.trim());
+  const trimmedName = name.trim();
+  const nameParts = trimmedName.split(/\s+/).filter(part => part.length > 0);
+  return /^[A-Za-z\s]+$/.test(trimmedName) && nameParts.length >= 2;
 }
 
-// Email: common format check
+/**
+ * @param {string} email User's email address.
+ * @returns {boolean} True if the email matches a common format.
+ */
 function isValidEmail(email) {
-  // Ensure email is a string before trimming
   if (typeof email !== 'string') {
     console.error("isValidEmail: Received non-string input:", email);
     return false;
@@ -33,34 +40,35 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
-// Phone: international format check using libphonenumber
+/**
+ * @param {string} phone User's phone number.
+ * @returns {boolean} True if the phone number is considered valid by the `google-libphonenumber` library.
+ */
 function isValidPhoneNumber(phone) {
-  // Ensure phone is a string
   if (typeof phone !== 'string') {
     console.error("isValidPhoneNumber: Received non-string input:", phone);
     return false;
   }
   try {
-    // Important: Use your primary user base's country code for default region.
-    // For Zambia, it's 'ZM'. This helps parse local numbers without the '+' prefix correctly.
-    // If your users are truly global and always provide '+' prefix, you can omit 'ZM'.
-    const parsed = phoneUtil.parse(phone, 'ZM');
+    const parsed = phoneUtil.parse(phone);
     return phoneUtil.isValidNumber(parsed);
   } catch (error) {
-    // Log specific parsing errors from libphonenumber for debugging
     console.error("Phone number parsing error:", error.message, "for phone:", phone);
     return false;
   }
 }
 
-// --- Google Sheets Integration ---
+/**
+ * @async
+ * @param {string} name User's full name.
+ * @param {string} email User's email address.
+ * @param {string} phone User's phone number.
+ * @throws {Error} If saving to Google Sheets fails.
+ */
 async function saveToGoogleSheets(name, email, phone) {
-  // IMPORTANT: AUTHENTICATION USING ENVIRONMENT VARIABLES (SECURE WAY)
-  // Ensure you have GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY set in Vercel's project environment variables.
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_CLIENT_EMAIL,
-      // Replace escaped newlines in the private key string
       private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
     },
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -68,52 +76,86 @@ async function saveToGoogleSheets(name, email, phone) {
 
   const sheets = google.sheets({ version: 'v4', auth: await auth.getClient() });
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: '1XM1x2xZvWjF99P4o3TP1Od9rFXhozfx-ICKr-vbnRRc', // <<-- MAKE SURE THIS IS YOUR CORRECT SPREADSHEET ID
-    range: 'Sheet1!A1:C1', // Make sure your Google Sheet has columns A, B, C set up for Fullname, Email, Phone Number
-    valueInputOption: 'USER_ENTERED', // Data is parsed as if entered by a user
-    resource: {
-      values: [[name, email, phone]],
-    },
-  });
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: 'Sheet1!A1:C1',
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[name, email, phone]],
+      },
+    });
+    console.log('User info saved to Google Sheets successfully.');
+  } catch (error) {
+    console.error('Error saving to Google Sheets:', error);
+    throw error;
+  }
 }
 
-// --- Webhook POST Endpoint ---
+/**
+ * @async
+ * @param {string} recipientEmail User's email address to send confirmation to.
+ * @throws {Error} If sending the confirmation email fails.
+ */
+async function sendConfirmationEmail(recipientEmail) {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'Gmail',
+      auth: {
+        user: process.env.EMAIL_AUTH_USER,
+        pass: process.env.EMAIL_AUTH_PASS,
+      },
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_AUTH_USER,
+      to: recipientEmail,
+      subject: 'Thank You for Booking with US Cryotherapy!',
+      text: 'Thank you for choosing US Cryotherapy. We look forward to seeing you!',
+      html: '<p>Thank you for choosing <b>US Cryotherapy</b>! We look forward to seeing you.</p>',
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Confirmation email sent:', info.messageId, 'to:', recipientEmail);
+  } catch (error) {
+    console.error('Error sending confirmation email:', error);
+    throw error;
+  }
+}
+
+/**
+ * @async
+ * @route POST /api/webhook
+ * @param {express.Request} req Dialogflow request object.
+ * @param {express.Response} res Express response object.
+ * @returns {Promise<void>}
+ */
 app.post('/api/webhook', async (req, res) => {
   const params = req.body.queryResult.parameters;
 
-  // Log raw parameters received from Dialogflow for debugging
   console.log('Dialogflow raw parameters received:', JSON.stringify(params, null, 2));
 
-  // --- CORRECTED FULLNAME EXTRACTION ---
-  // Handles `fullname` which might be an object { name: '...' } (from Dialogflow) or a simple string.
   const nameParam = params['fullname'];
   const name = typeof nameParam === 'object' && nameParam !== null && typeof nameParam.name === 'string'
-               ? String(nameParam.name) // If it's a valid object with a 'name' property, use that value and ensure it's a string.
-               : String(nameParam || ''); // Otherwise, use the parameter value directly (convert to string, handle null/undefined as empty string).
-  // --- END CORRECTED FULLNAME EXTRACTION ---
+               ? String(nameParam.name).trim()
+               : String(nameParam || '').trim();
 
-  const email = params['email'];
-  const phone = params['phone-number']; // This should now correctly pick up the phone number after you fixed the typo in Dialogflow.
+  const email = String(params['email'] || '').trim();
+  const phone = String(params['phone-number'] || '').trim();
 
-  // Log extracted and processed values for debugging before validation
   console.log('Extracted and processed values for validation:', { name, email, phone });
 
-  // --- Initial Check for Missing/Empty Parameters ---
-  // If 'name', 'email', or 'phone' are empty strings after extraction (meaning Dialogflow didn't provide them validly),
-  // or if they are null/undefined.
   if (!name || !email || !phone) {
-      console.error("Initial parameter check failed: One or more required parameters are empty or missing after extraction.");
-      return res.json({
-          followupEventInput: {
-              name: 'collect_user_info',
-              languageCode: 'en',
-          },
-          fulfillmentText: "I seem to be missing some information. Could you please provide your full name, email address, and phone number?",
-      });
+    console.error("Initial parameter check failed: Missing required parameters.");
+    return res.json({
+      followupEventInput: {
+        name: 'collect_user_info',
+        languageCode: 'en',
+      },
+      fulfillmentText: "I seem to be missing some information. Could you please provide your full name, email address, and phone number?",
+    });
   }
 
-  // --- Validate Extracted Parameters ---
   const nameValid = isValidName(name);
   const emailValid = isValidEmail(email);
   const phoneValid = isValidPhoneNumber(phone);
@@ -122,30 +164,36 @@ app.post('/api/webhook', async (req, res) => {
 
   if (!nameValid || !emailValid || !phoneValid) {
     console.log('Validation failed for one or more fields. Re-triggering collect_user_info.');
+    let invalidFieldsMessage = '';
+    if (!nameValid) invalidFieldsMessage += 'your full name (at least two names), ';
+    if (!emailValid) invalidFieldsMessage += 'a valid email address, ';
+    if (!phoneValid) invalidFieldsMessage += 'a valid phone number, ';
+
+    invalidFieldsMessage = invalidFieldsMessage.replace(/,\s*$/, '.');
+
     return res.json({
       followupEventInput: {
         name: 'collect_user_info',
         languageCode: 'en',
       },
-      fulfillmentText: "The information you provided is not in a valid format. Can you please provide your full name, a valid email address, and a valid phone number?", // More specific error message to the user
+      fulfillmentText: `The information you provided for ${invalidFieldsMessage} is not in a valid format. Could you please double-check and provide it again? For your name, please ensure you provide at least your first and last name. For the phone number, please ensure it's a valid international format.`,
     });
   }
 
-  // --- If all validations pass, save to Google Sheets and trigger next intent ---
   try {
     await saveToGoogleSheets(name, email, phone);
-    console.log('User info saved to Google Sheets successfully.');
+    await sendConfirmationEmail(email);
+
     return res.json({
       followupEventInput: {
-        name: 'trigger-booking-intent', // Event to trigger your next intent after successful data collection
+        name: 'trigger-booking-intent',
         languageCode: 'en',
       },
     });
   } catch (error) {
-    console.error('Error saving to Google Sheets:', error);
-    // Return a user-friendly error message to Dialogflow
+    console.error('Error during data processing:', error);
     return res.status(500).json({
-      fulfillmentText: "I'm sorry, I encountered an error while trying to save your information. Please try again later.",
+      fulfillmentText: "I'm sorry, I encountered an error while processing your information. Please try again later.",
     });
   }
 });
