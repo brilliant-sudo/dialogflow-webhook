@@ -27,7 +27,7 @@ function isValidName(name) {
   }
   const trimmedName = name.trim();
   const nameParts = trimmedName.split(/\s+/).filter(part => part.length > 0);
-  return /^[A-Za-z\\s]+$/.test(trimmedName) && nameParts.length >= 2;
+  return /^[a-zA-Z\s]+$/.test(trimmedName) && nameParts.length >= 2;
 }
 
 /**
@@ -40,7 +40,7 @@ function isValidEmail(email) {
     console.error("isValidEmail: Received non-string input:", email);
     return false;
   }
-  return /^[\\S@]+@[\\S@]+\\.[\\S@]+$/.test(email.trim());
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
 /**
